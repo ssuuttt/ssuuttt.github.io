@@ -74,6 +74,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            user-select: none;
         }
 
         .blog-link:hover,
@@ -173,6 +174,110 @@
             font-size: 0.9em;
             color: var(--accent-color);
         }
+        #searchContainer {
+            padding: 10px;
+            background-color: var(--card-bg-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        #searchInput {
+            width: 100%;
+            padding: 5px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        #searchResultsFrame {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            max-height: 80%;
+            background-color: var(--card-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1001;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .search-result {
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+        }
+
+        .search-result:hover {
+            background-color: var(--link-hover-bg);
+        }
+
+        .search-result-url {
+            font-weight: bold;
+            color: var(--accent-color);
+            margin-bottom: 5px;
+        }
+
+        .search-result-context {
+            font-size: 0.9em;
+        }
+
+        .highlight-search {
+            background-color: yellow;
+            color: black;
+        }
+        .go-to-url-button {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: var(--accent-color);
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            transition: background-color 0.3s;
+            position: relative;
+        }
+
+        .go-to-url-button:hover {
+            background-color: #2980b9;
+        }
+
+        .tooltip {
+            visibility: hidden;
+            width: 140px;
+            background-color: #555;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 150%;
+            left: 50%;
+            margin-left: -75px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .tooltip::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #555 transparent transparent transparent;
+        }
+
+        .go-to-url-button:hover .tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+
     </style>
 </head>
 
@@ -180,6 +285,9 @@
     <button id="themeSwitch">Switch Theme</button>
     <div id="linkList">
         <h2>Blog Links</h2>
+        <div id="searchContainer">
+            <input type="text" id="searchInput" placeholder="Search summaries...">
+        </div>
         <div id="activeFilters"></div>
         <!-- Links will be dynamically inserted here -->
     </div>
@@ -187,9 +295,13 @@
         <!-- Blog content will be displayed here -->
     </div>
 
+    <div id="searchResultsFrame">
+        <!-- Search results will be dynamically inserted here -->
+    </div>
     <script>
         let blogData = [];
         let activeHashtags = new Set();
+        let searchTimeout;
 
         function nl2br(str) {
             return str.replace(/\\n/g, '<br>');
@@ -216,6 +328,10 @@
             const hashtags = extractHashtags(blog.summary);
             contentDisplay.innerHTML = `
                 <div class="blog-content">
+                     <a href="${blog.url}" target="_blank" class="go-to-url-button" onmouseover="copyToClipboard('${blog.url}')">
+                        Go to URL
+                        <span class="tooltip">URL copied to clipboard!</span>
+                    </a>
                     <h3>Summary</h3>
                     <p>${nl2br(blog.summary)}</p>
                     <div class="hashtags">${hashtags}</div>
@@ -229,7 +345,13 @@
             });
         }
 
-
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                console.log('URL copied to clipboard');
+            }, (err) => {
+                console.error('Could not copy text: ', err);
+            });
+        }
         function updateUrlHighlights() {
             const linkList = document.getElementById('linkList');
             linkList.querySelectorAll('.blog-link').forEach((link, index) => {
@@ -276,9 +398,98 @@
                 hashtag.classList.toggle('active', activeHashtags.has(tag));
             });
         }
+
+        function highlightSearchTerm(text, term) {
+            if (!term) return text;
+            const regex = new RegExp(`(${term})`, 'gi');
+            return text.replace(regex, '<span class="highlight-search">$1</span>');
+        }
+        function getContext(text, term, contextLength = 100) {
+            const index = text.toLowerCase().indexOf(term.toLowerCase());
+            if (index === -1) return '';
+            
+            const start = Math.max(0, index - contextLength);
+            const end = Math.min(text.length, index + term.length + contextLength);
+            let context = text.slice(start, end);
+            
+            if (start > 0) context = '...' + context;
+            if (end < text.length) context += '...';
+            
+            return context;
+        }
+        function displaySearchResults(searchTerm) {
+            const searchResultsFrame = document.getElementById('searchResultsFrame');
+            searchResultsFrame.innerHTML = '';
+            
+            if (searchTerm.length < 3) {
+                searchResultsFrame.style.display = 'none';
+                return;
+            }
+
+            const results = blogData.filter(blog => 
+                blog.summary.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            if (results.length === 0) {
+                searchResultsFrame.style.display = 'none';
+                return;
+            }
+
+            results.forEach(blog => {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'search-result';
+                
+                const urlDiv = document.createElement('div');
+                urlDiv.className = 'search-result-url';
+                urlDiv.textContent = blog.url;
+                
+                const contextDiv = document.createElement('div');
+                contextDiv.className = 'search-result-context';
+                const context = getContext(blog.summary, searchTerm);
+                contextDiv.innerHTML = highlightSearchTerm(context, searchTerm);
+                
+                resultDiv.appendChild(urlDiv);
+                resultDiv.appendChild(contextDiv);
+                
+                resultDiv.addEventListener('click', () => {
+                    displayBlogContent(blog);
+                    searchResultsFrame.style.display = 'none';
+                });
+                
+                searchResultsFrame.appendChild(resultDiv);
+            });
+
+            searchResultsFrame.style.display = 'block';
+        }
+
+        function updateUrlHighlights() {
+            const linkList = document.getElementById('linkList');
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            
+            linkList.querySelectorAll('.blog-link').forEach((link, index) => {
+                const blog = blogData[index];
+                const blogHashtags = new Set(blog.summary.match(/#\w+/g) || []);
+                const matchesHashtags = activeHashtags.size === 0 ||
+                    [...activeHashtags].some(tag => blogHashtags.has(tag));
+                const matchesSearch = searchTerm === '' || blog.summary.toLowerCase().includes(searchTerm);
+                
+                link.classList.toggle('highlight', matchesHashtags && matchesSearch);
+
+                // Update link text with highlighted search term
+                if (matchesSearch && searchTerm !== '') {
+                    link.innerHTML = highlightSearchTerm(blog.url, searchTerm);
+                } else {
+                    link.textContent = blog.url;
+                }
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             const linkList = document.getElementById('linkList');
             const themeSwitch = document.getElementById('themeSwitch');
+            const searchInput = document.getElementById('searchInput');
+            const searchResultsFrame = document.getElementById('searchResultsFrame');
+
 
             themeSwitch.addEventListener('click', function () {
                 document.documentElement.classList.toggle('light-theme');
@@ -291,7 +502,26 @@
             linkList.addEventListener('mouseleave', function () {
                 this.classList.remove('expanded');
             });
-
+            searchInput.addEventListener('input', function() {
+                clearTimeout(searchTimeout);
+                const searchTerm = this.value;
+                
+                searchTimeout = setTimeout(() => {
+                    displaySearchResults(searchTerm);
+                    updateUrlHighlights();
+                }, 300);
+            });
+            searchInput.addEventListener('click', function() {
+                const searchTerm = this.value;
+                if (searchTerm.length >= 3) {
+                    displaySearchResults(searchTerm);
+                }
+            });
+            document.addEventListener('click', function(event) {
+                if (!searchResultsFrame.contains(event.target) && event.target !== searchInput) {
+                    searchResultsFrame.style.display = 'none';
+                }
+            });
             fetch('blog_data.json')
                 .then(response => response.json())
                 .then(data => {
@@ -307,6 +537,12 @@
                             displayBlogContent(blog);
                             linkList.classList.remove('expanded');
                         });
+                          // Double-click event
+                        link.addEventListener('dblclick', function(event) {
+                            event.preventDefault(); // Prevent text selection
+                            window.open(blog.url, '_blank');
+                        });
+
                         linkList.appendChild(link);
 
                         if (index === 0) {
